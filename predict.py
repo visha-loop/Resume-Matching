@@ -1,3 +1,4 @@
+import xgboost
 #import joblib
 #import numpy as np
 
@@ -35,9 +36,7 @@ job_embeddings = np.load("job_embeddings.npy")
 
 print("Step 4")
 
-#xgb_model = joblib.load("resume_matching_xgboost.pkl")
-xgb_model = "test"
-#xgb_model = None
+xgb_model = joblib.load("resume_matching_xgboost.pkl")
 print("Step 5")
 
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -132,24 +131,34 @@ def predict_match(resume_text,
                   job_description,
                   experience_text):
 
+    print("A - Starting predict_match")
+
     semantic = calculate_semantic_similarity(
         resume_text,
         job_description
     )
+
+    print("B - Semantic done")
 
     career = calculate_career_similarity(
         career_objective,
         job_description
     )
 
+    print("C - Career done")
+
     bleu = calculate_bleu(
         resume_text,
         job_description
     )
 
+    print("D - BLEU done")
+
     experience = extract_experience(
         experience_text
     )
+
+    print("E - Experience done")
 
     sample = pd.DataFrame({
         "semantic_similarity": [semantic],
@@ -158,8 +167,11 @@ def predict_match(resume_text,
         "bleu_score": [bleu]
     })
 
+    print("F - DataFrame created")
+
     prediction = xgb_model.predict(sample)[0]
-    #prediction = 0.85
+
+    print("G - Prediction done")
     print("=" * 60)
     print("              AI RESUME MATCH REPORT")
     print("=" * 60)
@@ -185,12 +197,19 @@ def predict_match(resume_text,
     resume_skills = extract_skills(resume_text)
     job_skills = extract_skills(job_description)
     missing = job_skills - resume_skills
-    print("\n📌 Missing Skills")
 
+    print("\n📌 Missing Skills")
     if len(missing) == 0:
         print("None 🎉")
     else:
         for skill in sorted(missing):
             print("-", skill)
 
-    return float(prediction)
+    return {
+        "prediction": float(prediction),
+        "semantic_similarity": float(semantic),
+        "career_similarity": float(career),
+        "bleu_score": float(bleu),
+        "experience": int(experience),
+        "missing_skills": list(missing)
+    }
