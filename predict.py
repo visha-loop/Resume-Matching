@@ -1,8 +1,5 @@
-import xgboost
-#import joblib
-#import numpy as np
-
-#model = joblib.load("resume_matching_xgboost.pkl")
+import lightgbm as lgb
+# import xgboost  # Kept for reference/backward compatibility
 import pandas as pd
 import numpy as np
 import joblib
@@ -36,10 +33,11 @@ job_embeddings = np.load("job_embeddings.npy")
 
 print("Step 4")
 
-xgb_model = joblib.load("resume_matching_xgboost.pkl")
+# xgb_model = joblib.load("resume_matching_xgboost.pkl")  # Kept for reference
+lgb_model = joblib.load("resume_matching_lightgbm.pkl")
 print("Step 5")
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5")
 
 print("Step 6")
 def calculate_semantic_similarity(resume, job):
@@ -104,32 +102,32 @@ def extract_experience(text):
 
     return 0
 SKILLS = {
-    "python","java","c++","c","sql","mysql","postgresql","mongodb",
-    "machine learning","deep learning","artificial intelligence",
-    "tensorflow","pytorch","keras","scikit-learn",
-    "pandas","numpy","matplotlib","seaborn",
-    "fastapi","flask","django",
-    "react","next.js","node.js",
-    "git","github","linux",
-    "aws","azure","docker","kubernetes",
-    "langchain","langgraph","hugging face","opencv"
+    "Python", "Java", "C++", "SQL", "MySQL", "PostgreSQL", "MongoDB",
+    "Machine Learning", "Deep Learning", "Artificial Intelligence",
+    "TensorFlow", "PyTorch", "Keras", "Scikit-Learn", "NumPy", "Pandas",
+    "Matplotlib", "FastAPI", "Flask", "Django", "React", "Next.js",
+    "Node.js", "Docker", "Kubernetes", "AWS", "Azure", "GCP", "Git",
+    "GitHub", "Linux", "LangChain", "LangGraph", "OpenCV", "Hugging Face"
 }
 
 def extract_skills(text):
-
     text = text.lower()
-
     found = set()
-
     for skill in SKILLS:
         if skill.lower() in text:
             found.add(skill)
-
     return found
+
 def predict_match(resume_text,
                   career_objective,
                   job_description,
                   experience_text):
+
+    # Graceful handling for empty/missing inputs
+    if not resume_text or not resume_text.strip():
+        raise ValueError("Resume text content is empty. Please upload a valid PDF resume containing readable text.")
+    if not job_description or not job_description.strip():
+        raise ValueError("Job description is empty. Please paste a valid job description.")
 
     print("A - Starting predict_match")
 
@@ -160,23 +158,40 @@ def predict_match(resume_text,
 
     print("E - Experience done")
 
+    # Compute skill overlap
+    resume_skills = extract_skills(resume_text)
+    job_skills = extract_skills(job_description)
+    matched_skills = list(resume_skills.intersection(job_skills))
+    missing_skills = list(job_skills - resume_skills)
+
+    if len(job_skills) > 0:
+        skill_overlap = len(matched_skills) / len(job_skills)
+    else:
+        skill_overlap = 0.0
+
+    # Prediction dataframe with exactly 5 features in correct order
     sample = pd.DataFrame({
         "semantic_similarity": [semantic],
         "career_similarity": [career],
         "required_experience": [experience],
-        "bleu_score": [bleu]
+        "bleu_score": [bleu],
+        "skill_overlap": [skill_overlap]
     })
 
     print("F - DataFrame created")
 
-    prediction = xgb_model.predict(sample)[0]
+    # LightGBM inference
+    prediction = lgb_model.predict(sample)[0]
+
+    # Clip match score to a realistic percentage [0.0, 1.0]
+    match_score = float(max(0.0, min(1.0, prediction)))
 
     print("G - Prediction done")
     print("=" * 60)
     print("              AI RESUME MATCH REPORT")
     print("=" * 60)
 
-    print(f"\n🎯 Match Score : {prediction*100:.2f}%")
+    print(f"\n🎯 Match Score : {match_score*100:.2f}%")
 
     print("\n-------------------------------")
 
@@ -184,32 +199,32 @@ def predict_match(resume_text,
     print(f"🎯 Career Similarity   : {career:.3f}")
     print(f"📝 BLEU Score          : {bleu:.3f}")
     print(f"💼 Experience          : {experience} years")
+    print(f"📊 Skill Overlap       : {skill_overlap:.3f}")
 
     print("\n===============================")
 
-    if prediction >= 0.80:
-        print("✅ Recommendation : Strong Match")
-    elif prediction >= 0.60:
-        print("🟡 Recommendation : Good Match")
+    # Recommendation logic
+    if match_score >= 0.80:
+        recommendation = "Strong Match"
+    elif match_score >= 0.60:
+        recommendation = "Good Match"
     else:
-        print("❌ Recommendation : Weak Match")
+        recommendation = "Weak Match"
 
-    resume_skills = extract_skills(resume_text)
-    job_skills = extract_skills(job_description)
-    missing = job_skills - resume_skills
+    print(f"📌 Recommendation : {recommendation}")
+    print(f"📌 Missing Skills : {missing_skills}")
 
-    print("\n📌 Missing Skills")
-    if len(missing) == 0:
-        print("None 🎉")
-    else:
-        for skill in sorted(missing):
-            print("-", skill)
+    confidence = round(match_score * 100, 2)
 
     return {
-        "prediction": float(prediction),
+        "match_score": match_score,
         "semantic_similarity": float(semantic),
         "career_similarity": float(career),
         "bleu_score": float(bleu),
-        "experience": int(experience),
-        "missing_skills": list(missing)
+        "required_experience": int(experience),
+        "skill_overlap": float(skill_overlap),
+        "matched_skills": matched_skills,
+        "missing_skills": missing_skills,
+        "recommendation": recommendation,
+        "confidence": confidence
     }

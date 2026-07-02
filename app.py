@@ -1,5 +1,6 @@
 import streamlit as st
-import xgboost  # Import xgboost first to avoid OpenMP duplicate library conflict on macOS
+import lightgbm as lgb  # Import lightgbm first to avoid OpenMP duplicate library conflict on macOS
+# import xgboost  # Kept for reference/backward compatibility
 from utils import extract_text_from_pdf
 from predict import predict_match
 
@@ -58,7 +59,7 @@ st.markdown("""
         color: #f1f5f9;
     }
     
-    /* Skill Badge */
+    /* Skill Badge (Missing) */
     .skill-badge {
         display: inline-block;
         padding: 6px 14px;
@@ -74,6 +75,24 @@ st.markdown("""
     .skill-badge:hover {
         background-color: rgba(239, 68, 68, 0.2);
         border-color: rgba(239, 68, 68, 0.4);
+    }
+    
+    /* Skill Badge (Matched) */
+    .skill-badge-matched {
+        display: inline-block;
+        padding: 6px 14px;
+        margin: 4px;
+        border-radius: 50px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background-color: rgba(16, 185, 129, 0.1);
+        color: #a7f3d0;
+        border: 1px solid rgba(16, 185, 129, 0.25);
+        transition: all 0.2s ease;
+    }
+    .skill-badge-matched:hover {
+        background-color: rgba(16, 185, 129, 0.2);
+        border-color: rgba(16, 185, 129, 0.4);
     }
     
     .skill-badge-all {
@@ -149,24 +168,25 @@ with col2:
         res = results_data['result']
         resume_txt = results_data['resume_text']
         
-        score = res['prediction']
+        score = res['match_score']
         semantic = res['semantic_similarity']
         career = res['career_similarity']
         bleu = res['bleu_score']
-        exp = res['experience']
+        exp = res['required_experience']
+        skill_overlap = res['skill_overlap']
+        matched = res['matched_skills']
         missing = res['missing_skills']
+        rec_text = res['recommendation']
+        confidence = res['confidence']
         
-        # Determine recommendations and styling
+        # Determine recommendations color theme
         if score >= 0.80:
-            rec_text = "Strong Match"
             rec_color = "linear-gradient(135deg, #059669, #10b981)"
             rec_icon = "✅"
         elif score >= 0.60:
-            rec_text = "Good Match"
             rec_color = "linear-gradient(135deg, #d97706, #f59e0b)"
             rec_icon = "🟡"
         else:
-            rec_text = "Weak Match"
             rec_color = "linear-gradient(135deg, #dc2626, #ef4444)"
             rec_icon = "❌"
             
@@ -175,61 +195,72 @@ with col2:
         <div style="background: {rec_color}; padding: 28px; border-radius: 16px; text-align: center; color: white; margin-bottom: 25px; box-shadow: 0 10px 25px rgba(0,0,0,0.15);">
             <div style="font-size: 0.95rem; opacity: 0.85; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px;">Recommendation Report</div>
             <div style="font-size: 3.5rem; font-weight: 800; margin: 5px 0;">{score * 100:.1f}%</div>
-            <div style="font-size: 1.3rem; font-weight: 700; background: rgba(255, 255, 255, 0.2); display: inline-block; padding: 6px 20px; border-radius: 50px; margin-top: 5px;">
+            <div style="font-size: 1.3rem; font-weight: 700; background: rgba(255, 255, 255, 0.2); display: inline-block; padding: 6px 20px; border-radius: 50px; margin-top: 5px; margin-bottom: 10px;">
                 {rec_icon} {rec_text}
             </div>
+            <div style="font-size: 0.95rem; opacity: 0.9; font-weight: 500;">Confidence: {confidence:.2f}%</div>
         </div>
         """, unsafe_allow_html=True)
         
-        # Grid layout for metrics
-        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        # Grid layout for progress bars
+        st.subheader("📈 Match Performance Indicators")
         
-        with m_col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">🧠 Semantic</div>
-                <div class="metric-val">{semantic:.2f}</div>
+        def render_progress_bar(label, value_frac):
+            percentage = max(0.0, min(100.0, value_frac * 100))
+            return f"""
+            <div style="margin-bottom: 18px;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.9rem; margin-bottom: 6px;">
+                    <span style="font-weight: 500; color: #f1f5f9;">{label}</span>
+                    <span style="font-weight: 600; color: #a5b4fc;">{percentage:.1f}%</span>
+                </div>
+                <div style="background-color: rgba(255, 255, 255, 0.05); border-radius: 10px; height: 10px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.05);">
+                    <div style="background: linear-gradient(90deg, #6366f1, #818cf8); width: {percentage:.1f}%; height: 100%; border-radius: 10px;"></div>
+                </div>
             </div>
-            """, unsafe_allow_html=True)
+            """
+
+        p_col1, p_col2 = st.columns(2)
+        with p_col1:
+            st.markdown(render_progress_bar("🎯 Overall Match", score), unsafe_allow_html=True)
+            st.markdown(render_progress_bar("🧠 Semantic Similarity", semantic), unsafe_allow_html=True)
+            st.markdown(render_progress_bar("💼 Career Similarity", career), unsafe_allow_html=True)
+        with p_col2:
+            st.markdown(render_progress_bar("📝 BLEU Score", bleu), unsafe_allow_html=True)
+            st.markdown(render_progress_bar("📊 Skill Overlap", skill_overlap), unsafe_allow_html=True)
             
-        with m_col2:
+            # Experience Card
             st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">🎯 Career</div>
-                <div class="metric-val">{career:.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with m_col3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">📝 BLEU Score</div>
-                <div class="metric-val">{bleu:.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with m_col4:
-            st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-card" style="margin-top: 15px; padding: 12px;">
                 <div class="metric-label">💼 Experience</div>
-                <div class="metric-val">{exp} yr{"s" if exp != 1 else ""}</div>
+                <div class="metric-val" style="font-size: 1.4rem;">{exp} yr{"s" if exp != 1 else ""}</div>
             </div>
             """, unsafe_allow_html=True)
             
         st.divider()
         
-        # Missing Skills Card
-        st.subheader("📌 Missing Skills Analysis")
-        if missing:
-            st.write("The following key skills found in the Job Description were not detected in the resume:")
-            badges_html = "".join([f'<span class="skill-badge">{skill}</span>' for skill in sorted(missing)])
-            st.markdown(f'<div style="margin-top: 10px; margin-bottom: 20px;">{badges_html}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="skill-badge-all" style="padding: 12px 20px; border-radius: 12px; display: block; text-align: center;">
-                🎉 <b>Excellent!</b> Candidate possesses all the skills identified in the Job Description.
-            </div>
-            """, unsafe_allow_html=True)
+        # Skills Analysis Section
+        st.subheader("📌 Skill Match Analysis")
+        
+        s_col1, s_col2 = st.columns(2)
+        with s_col1:
+            st.markdown("##### ✅ Matched Skills")
+            if matched:
+                badges_matched = "".join([f'<span class="skill-badge-matched">{skill}</span>' for skill in sorted(matched)])
+                st.markdown(f'<div style="margin-top: 8px; margin-bottom: 15px;">{badges_matched}</div>', unsafe_allow_html=True)
+            else:
+                st.info("No matching required skills detected in the resume.")
+                
+        with s_col2:
+            st.markdown("##### ❌ Missing Skills")
+            if missing:
+                badges_missing = "".join([f'<span class="skill-badge">{skill}</span>' for skill in sorted(missing)])
+                st.markdown(f'<div style="margin-top: 8px; margin-bottom: 15px;">{badges_missing}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div class="skill-badge-all" style="padding: 10px; border-radius: 8px; display: block; text-align: center; margin-top: 8px;">
+                    🎉 <b>Excellent!</b> Candidate possesses all the skills identified in the Job Description.
+                </div>
+                """, unsafe_allow_html=True)
             
         st.divider()
         
